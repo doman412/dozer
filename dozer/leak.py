@@ -7,6 +7,7 @@ import time
 import warnings
 from io import BytesIO
 from types import FrameType, ModuleType
+import json
 
 try:
     from PIL import Image
@@ -83,7 +84,9 @@ class Dozer(object):
             path = path[:-1]
         self.path = path
         self.history = {}
+        self.last_history = None
         self.samples = 0
+        self.sample_count = 0
         self._start_thread()
         self._maybe_warn_about_PIL()
 
@@ -148,6 +151,10 @@ class Dozer(object):
                 self.history[typename] = [0] * self.samples
             self.history[typename].append(count)
 
+        if self.samples == 0:
+            self.last_history = {typename: 0 for typename in self.history}
+            self.snapshot_sample = self.samples
+
         samples = self.samples + 1
 
         # Add dummy entries for any types which no longer exist
@@ -163,31 +170,76 @@ class Dozer(object):
         else:
             self.samples = samples
 
+        self.sample_count = self.sample_count + 1
+
     def stop(self):
         self.running = False
 
+    def collect_last_history(self, index=-1):
+        """collect the last history of each type in the history obj"""
+        self.last_history = {typename: self.history[typename][index] for typename in self.history}
+        self.snapshot_sample = self.sample_count
+
     def index(self, req):
         floor = req.GET.get('floor', 0)
+        ceil = req.GET.get('ceil', None)
+        query = req.GET.get('q', '')
+        interval = req.GET.get('interval', -1)
+        sort = req.GET.get('sort', None)
+        hide_zero_growth = req.GET.get('hide-zero-growth', False)
+
         rows = []
         typenames = sorted(self.history)
+
+        growth = False
+        if sort == 'growth':
+            growth = True
+            typenames = sorted(self.history, lambda a,b: cmp(self.last_history.get(a, 0) - self.history.get(a, 0)[-1], self.last_history.get(b, 0) - self.history.get(b, 0)[-1]))
+
         for typename in typenames:
+            if query and query not in typename:
+                continue
             hist = self.history[typename]
+            last = self.last_history.get(typename, -hist[-1])
+
+            growth_label = ''
+            growth_value = hist[-1] - last
+
+            if growth:
+                growth_label = " Growth: %s" % (growth_value)
+
             maxhist = max(hist)
-            if maxhist > int(floor):
-                row = ('<div class="typecount">%s<br />'
-                       '<img class="chart" src="%s" /><br />'
-                       'Min: %s Cur: %s Max: %s <a href="%s">TRACE</a></div>'
-                       % (cgi.escape(typename),
-                          url(req, "chart/%s" % typename),
-                          min(hist), hist[-1], maxhist,
-                          url(req, "trace/%s" % typename),
-                          )
-                       )
-                rows.append(row)
+            if maxhist > int(floor) and (ceil is None or maxhist < int(ceil)):
+                if not hide_zero_growth or (hide_zero_growth and growth_value != 0):
+                    row = ("""<div class="typecount">{typename}<br />
+                           <img class="chart" src="{chart}" /><br />
+                           Min: {min} Last: {last} Cur: {cur} Max: {max} {growth} <a href="{trace}">TRACE</a></div>"""
+                           .format(typename=cgi.escape(typename),
+                              chart=url(req, "chart/%s" % typename),
+                              min=min(hist),
+                              last=last,
+                              cur=hist[-1],
+                              max=maxhist,
+                              growth=growth_label,
+                              trace=url(req, "trace/%s" % typename),
+                              )
+                           )
+                    rows.append(row)
+
         res = Response()
-        res.text = template(req, "graphs.html", output="\n".join(rows))
+        res.text = template(req, "graphs.html", output="\n".join(rows), interval=interval, search=query, count=len(rows), samples=self.sample_count, snapshot_sample=self.snapshot_sample)
         return res
     index.exposed = True
+
+    def take_snapshot(self, req):
+        """take a snapshot of the history for use in checking growth"""
+        # set the last history from this call
+        self.collect_last_history()
+        res = Response()
+        res.headers["Content-Type"] = "application/json"
+        res.body = json.dumps({'samples': self.samples})
+        return res
+    take_snapshot.exposed = True
 
     def chart(self, req):
         """Return a sparkline chart of the given type."""
@@ -196,7 +248,7 @@ class Dozer(object):
             return Response('Cannot render; PIL/Pillow is not installed', status='404 Not Found')
         typename = req.path_info_pop()
         data = self.history[typename]
-        height = 20.0
+        height = 40.0
         scale = height / max(data)
         im = Image.new("RGB", (len(data), int(height)), 'white')
         draw = ImageDraw.Draw(im)

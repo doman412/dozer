@@ -9,3 +9,4 @@ bin/
 .noseids
 .coverage
 tmp/
+.DS_Store

@@ -3,6 +3,7 @@
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
 <head>
     <title>Dozer: Types</title>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
     <link href="%(maincss)s" rel="stylesheet" type="text/css" />
 
 <style type='text/css'>
@@ -25,11 +26,77 @@
 }
 
 </style>
+
 </head>
 
 <body>
 <div id="header">
-    <h1><a href="%(home)s">Dozer</a>: Types</h1>
+    <h1><a href="%(home)s">Dozer</a>: Types (%(count)s) [%(samples)s samples]</h1>
+    <div class="">
+      <button id="take-snapshot" type="button" name="button">Take Snapshot</button>
+      <label id="snapshot-sample" for="">Sample #: <span>%(snapshot_sample)s</span></label>
+    </div>
+    <div class="">
+      <label for="">refresh interval: </label>
+      <input id="interval" type="number" name="" value="%(interval)s">
+      ms (min: 2000)
+      <button id="interval-toggle" type="button" name="button">toggle</button>
+    </div>
+    <div class="">
+      <label for="">search: </label>
+      <input id="search" type="text" name="" value="%(search)s">
+    </div>
+
+    <script type="text/javascript">
+      var min = 2000
+      var interval_id = null
+      function startInterval(input){
+        var interval = input.val()
+        if(interval > min - 1){
+          console.log('setting reload interval: ', interval)
+          interval_id = setInterval(function () {
+            document.location.reload(true)
+            console.log('reload')
+          }, interval);
+        }
+      }
+
+      var search_input = $('#search').on('keyup', function(event){
+        if(event.which == 13){
+          var params = new URLSearchParams(document.location.search.substring(1));
+          params.set('q', this.value)
+          document.location.search = '?' + params.toString()
+        }
+      })
+      var input = $('#interval').on('keyup', function(event){
+        if(event.which == 13){
+          var params = new URLSearchParams(document.location.search.substring(1));
+          params.set('interval', parseInt(this.value) || -1)
+          document.location.search = '?' + params.toString()
+        }
+      })
+      var snapshot_button = $('#take-snapshot').on('click', function(event){
+        $.get({
+          url: '/_dozer/take_snapshot',
+          success: function(data){
+            console.log('snapshot', arguments)
+            $('#snapshot-sample span').text(data.samples)
+          }
+        })
+      })
+      var interval_toggle = $('#interval-toggle').on('click', function(event){
+        if(interval_id){
+          console.log('stop interval')
+          clearInterval(interval_id)
+          interval_id = null
+        } else {
+          startInterval(input)
+          console.log('start interval')
+        }
+      })
+      startInterval(input)
+
+    </script>
 </div>
 
 <div id="output">
